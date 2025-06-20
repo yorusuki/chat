@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>Phaser MMO Chat (In-Game UI)</title>
+  <script src="/phaser.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: black;
+      color: white;
+      overflow: hidden;
+    }
+
+    #ui {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #chatBox {
+      position: absolute;
+      bottom: 70px;
+      left: 20px;
+      right: 20px;
+      width: 40vw;
+      height: 20vh;
+      background: rgba(0, 0, 0, 0.7);
+      overflow-y: auto;
+      font-size: 16px;
+      color: white;
+      padding: 10px;
+      pointer-events: auto;
+      border-radius: 8px;
+    }
+
+    #msgInput {
+      width: 40vw;
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      /* width: 400px; */
+      padding: 8px;
+      font-size: 14px;
+      pointer-events: auto;
+      border-radius: 4px;
+      border: none;
+      outline: none;
+    }
+
+    #nameInputWrapper {
+      position: absolute;
+      top: 30%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #222;
+      padding: 20px;
+      border: 1px solid #555;
+      pointer-events: auto;
+      z-index: 10;
+    }
+
+    #nameInputWrapper input {
+      padding: 8px;
+      font-size: 16px;
+      width: 200px;
+    }
+  </style>
+
+</head>
+
+<body>
+
+  <div id="ui">
+    <div id="nameInputWrapper">
+      <p>Enter your name:</p>
+      <input id="nameInput" maxlength="12" placeholder="輸入你的名字">
+    </div>
+    <div id="chatBox"></div>
+    <input id="msgInput" placeholder="說些什麼吧.." disabled />
+  </div>
+
+  <script>
+    let composing = false;
+    const socket = io();
+    let player, cursors, others = {}, playerName = "";
+    let nameInput = document.getElementById('nameInput');
+    let nameWrapper = document.getElementById('nameInputWrapper');
+    let chatBox = document.getElementById('chatBox');
+    let msgInput = document.getElementById('msgInput');
+
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && nameInput.value.trim()) {
+        playerName = nameInput.value.trim();
+        nameWrapper.style.display = 'none';
+        msgInput.disabled = false;
+        initGame();
+      }
+    });
+
+    msgInput.addEventListener('compositionstart', () => {
+      composing = true;
+    });
+
+    msgInput.addEventListener('compositionend', () => {
+      composing = false;
+    });
+
+    msgInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !composing && msgInput.value.trim()) {
+        socket.emit('chatMessage', { msg: msgInput.value, name: playerName, id: socket.id });
+        msgInput.value = '';
+      }
+    });
+
+    function appendMessage(name, msg) {
+      const div = document.createElement('div');
+      div.innerHTML = `<strong>${name}</strong>: ${msg}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function initGame() {
+      let targetX = null, targetY = null;
+      const speed = 100; // 每秒移動速度
+      const config = {
+        type: Phaser.AUTO,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        backgroundColor: '#222',
+        physics: { default: 'arcade' },
+        scene: { preload, create, update }
+      };
+      const game = new Phaser.Game(config);
+      window.addEventListener('resize', () => {
+        game.scale.resize(window.innerWidth, window.innerHeight);
+      });
+      function preload() {
+        // this.load.spritesheet('player', 'assets/player.png', {
+        //   frameWidth: 21,
+        //   frameHeight: 21
+        // });
+        this.load.spritesheet('player', 'assets/catplayer.png', {
+          frameWidth: 48,
+          frameHeight: 48
+        });
+
+      }
+
+      function showSpeechBubble(scene, target, msg, color = '#fff') {
+        // 如果已有 speechBubble，先清掉
+        if (target.speechBubble) {
+          target.speechBubble.destroy();
+        }
+
+        const bubble = scene.add.text(target.x, target.y - 50, msg, {
+          fontSize: '14px',
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          padding: { x: 8, y: 5 },
+          color: color,
+          align: 'center'
+        }).setOrigin(0.5).setDepth(10);
+
+        target.speechBubble = bubble;
+
+        scene.time.delayedCall(3000, () => {
+          bubble.destroy();
+          target.speechBubble = null;
+        });
+      }
+
+      function create() {
+        this.input.on('pointerdown', (pointer) => {
+          targetX = pointer.worldX;
+          targetY = pointer.worldY;
+        });
+        player = this.physics.add.sprite(400, 300, 'player', 0);
+        player.setScale(3)
+        player.displayName = this.add.text(0, 0, playerName, { fontSize: '12px', fill: '#fff' }).setOrigin(0.5);
+        player.isJumping = false;
+        player.jumpSpeed = 0;
+        player.groundY = player.y;
+        player.lastDirection = 'down'; // 預設朝下站立
+        cursors = this.input.keyboard.createCursorKeys();
+
+        this.anims.create({
+          key: 'walk-down',
+          frames: this.anims.generateFrameNumbers('player', { start: 0, end: 3 }),
+          frameRate: 8,
+          repeat: -1
+        });
+        this.anims.create({
+          key: 'walk-up',
+          frames: this.anims.generateFrameNumbers('player', { start: 4, end: 7 }),
+          frameRate: 8,
+          repeat: -1
+        });
+        this.anims.create({
+          key: 'walk-left',
+          frames: this.anims.generateFrameNumbers('player', { start: 8, end: 11 }),
+          frameRate: 8,
+          repeat: -1
+        });
+        this.anims.create({
+          key: 'walk-right',
+          frames: this.anims.generateFrameNumbers('player', { start: 12, end: 15 }),
+          frameRate: 8,
+          repeat: -1
+        });
+        socket.emit('newPlayer', { name: playerName, x: player.x, y: player.y });
+
+        socket.on('currentPlayers', (players) => {
+          Object.keys(players).forEach(id => {
+            if (id !== socket.id) {
+              addOtherPlayer(this, players[id]);
+            }
+          });
+        });
+
+        socket.on('newPlayer', (data) => addOtherPlayer(this, data));
+
+        socket.on('playerMoved', (data) => {
+          if (others[data.id]) {
+            const other = others[data.id];
+            other.sprite.setPosition(data.x, data.y);
+            other.nameText.setPosition(data.x, data.y - 30);
+
+            if (data.animKey) {
+              // 如果不是正在播放，就播放
+              if (other.sprite.anims.currentAnim?.key !== data.animKey) {
+                other.sprite.anims.play(data.animKey, true);
+              }
+            } else if (data.frame !== undefined) {
+              // 如果沒有動畫資訊就靜止在特定 frame
+              other.sprite.anims.stop();
+              other.sprite.setFrame(0);
+            }
+          }
+        });
+
+        socket.on('playerDisconnected', (id) => {
+          if (others[id]) {
+            others[id].sprite.destroy();
+            others[id].nameText.destroy();
+            delete others[id];
+          }
+        });
+
+        socket.on('chatMessage', ({ name, msg, id }) => {
+          appendMessage(name, msg);
+          if (id === socket.id) {
+            showSpeechBubble(this, player, msg, '#fff');
+          } else if (others[id]) {
+            showSpeechBubble(this, others[id].sprite, msg, '#0f0');
+          }
+        });
+
+        this.input.keyboard.on('keydown-SPACE', () => {
+          const isMoving = cursors.left.isDown || cursors.right.isDown || cursors.up.isDown || cursors.down.isDown || targetX !== null;
+
+          if (!player.isJumping /* && !isMoving 如果你要禁止移動中跳的話 */) {
+            player.groundY = player.y; // <- ⭐ 記錄跳前的地面位置
+            player.isJumping = true;
+            player.jumpSpeed = -6;
+          }
+        });
+      }
+
+      function update(time, delta) {
+        let moved = false;
+
+        // 移動速度(像素/幀)
+        const moveSpeed = 2;
+
+        // 自動移動中，手動按鍵會中斷
+        if (cursors.left.isDown) {
+          player.x -= moveSpeed;
+          player.anims.play('walk-left', true);
+          moved = true;
+          targetX = targetY = null;
+          player.lastDirection = 'left';
+        }
+        else if (cursors.right.isDown) {
+          player.x += moveSpeed;
+          player.anims.play('walk-right', true);
+          moved = true;
+          targetX = targetY = null;
+          player.lastDirection = 'right';
+        }
+        else if (cursors.up.isDown) {
+          player.y -= moveSpeed;
+          player.anims.play('walk-up', true);
+          moved = true;
+          targetX = targetY = null;
+          player.lastDirection = 'up';
+        }
+        else if (cursors.down.isDown) {
+          player.y += moveSpeed;
+          player.anims.play('walk-down', true);
+          moved = true;
+          targetX = targetY = null;
+          player.lastDirection = 'down';
+        }
+        // 如果沒按鍵且有目標點，就自動移動
+        else if (targetX !== null && targetY !== null) {
+          const dx = targetX - player.x;
+          const dy = targetY - player.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist > 2) {
+            const angle = Math.atan2(dy, dx);
+            const vx = Math.cos(angle) * speed * (delta / 1000);
+            const vy = Math.sin(angle) * speed * (delta / 1000);
+            player.x += vx;
+            player.y += vy;
+            moved = true;
+
+            // 根據移動方向播放動畫
+            if (Math.abs(dx) > Math.abs(dy)) {
+              if (dx > 0) {
+                player.anims.play('walk-right', true);
+                player.lastDirection = 'right';
+              } else {
+                player.anims.play('walk-left', true);
+                player.lastDirection = 'left';
+              }
+            } else {
+              if (dy > 0) {
+                player.anims.play('walk-down', true);
+                player.lastDirection = 'down';
+              } else {
+                player.anims.play('walk-up', true);
+                player.lastDirection = 'up';
+              }
+            }
+          } else {
+            targetX = targetY = null;
+            player.anims.stop();
+          }
+        } else {
+          // 沒移動時停止動畫，保持最後方向的第一幀
+          player.anims.stop();
+          switch (player.lastDirection) {
+            case 'left': player.setFrame(8); break;
+            case 'right': player.setFrame(12); break;
+            case 'up': player.setFrame(4); break;
+            case 'down': player.setFrame(0); break;
+            default: player.setFrame(0);
+          }
+        }
+
+        // 跳躍處理
+        if (player.isJumping) {
+          player.y += player.jumpSpeed;
+          player.jumpSpeed += 0.3; // 重力加速度
+
+          if (player.y >= player.groundY) {
+            player.y = player.groundY;
+            player.isJumping = false;
+            player.jumpSpeed = 0;
+          }
+        }
+
+        // 讓名稱與對話氣泡跟隨玩家
+        player.displayName.setPosition(player.x, player.y - 30);
+
+        if (player.speechBubble) {
+          player.speechBubble.setPosition(player.x, player.y - 50);
+        }
+
+        // 發送移動位置給其他玩家
+        if (moved) {
+          socket.emit('move', {
+            x: player.x,
+            y: player.y,
+            animKey: player.anims.currentAnim ? player.anims.currentAnim.key : null,
+            frame: player.anims.currentFrame ? player.anims.currentFrame.index : 0
+          });
+        }
+      }
+
+
+      function addOtherPlayer(scene, data) {
+        const sprite = scene.physics.add.sprite(data.x, data.y, 'player');
+        sprite.setScale(3); // 加上這行來放大其他玩家
+        const nameText = scene.add.text(data.x, data.y - 30, data.name || 'Anon', { fontSize: '12px', fill: '#0f0' }).setOrigin(0.5);
+        others[data.id] = { sprite, nameText };
+      }
+    }
+  </script>
+</body>
+
+</html>
